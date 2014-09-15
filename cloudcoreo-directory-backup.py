@@ -19,6 +19,7 @@
 ##              --dump-dir </path/to/script>
 ##
 ######################################################################
+from posixpath import dirname
 import os, sys, stat
 import math
 from filechunkio import FileChunkIO
@@ -34,6 +35,8 @@ from optparse import OptionParser
 import argparse
 import textwrap
 from contextlib import closing
+from datetime import timedelta
+import re
 
 version = '0.0.3'
 
@@ -69,6 +72,7 @@ def parseArgs():
     parser.add_argument("--post-backup-script",      dest="postBackupScript",                            default=None,                                       required=False, help="A script to run blindly (./<script>) after tar-gzipping the backup directories, but before syncing to s3")
     parser.add_argument("--rolling-pattern",         dest="rollingPattern",                              default="24,7,5,12",                                required=False, help="A CSV of how many backups of each type to keep. I.E 24,7,5,12 will keep 24 hourly, 7 daily, 5 weekly, and 12 monthly")
     parser.add_argument("--restore",                 dest="restore",               action="store_true",  default=False,                                      required=False, help="Perform a restore")
+    parser.add_argument("--restore-stamp",           dest="restoreStamp",                                default=None,                                       required=False, help="The timestamp to restore - defaults to the lastest hourly backup")
     parser.add_argument("--dump-dir",                dest="dumpDir",                                     default="/tmp/backup-dump",                         required=False, help="Where to store the tar.gz files before uploading to s3")
     parser.add_argument("--pre-restore-script",      dest="preRestoreScript",                            default=None,                                       required=False, help="A script to run blindly (./<script>) before restoring the latest backup")
     parser.add_argument("--post-restore-script",     dest="postRestoreScript",                           default=None,                                       required=False, help="A script to run blindly (./<script>) after restoring the latest backup")
@@ -145,17 +149,42 @@ def error(message):
     raise Exception(message)
 
 def restoreDirectories():
-    backupfiles = getBackupFiles()
+    backupFiles = getBackupFiles()
+    log("backup files: %s" % backupFiles)
+    backupKey = None
+    ## try to restore the timestamp they asked for
+    if options.restoreStamp:
+        for key, stampType in backupFiles.iteritems():
+            for backupDir in stampType:
+                log("  backupDir: %s" % backupDir)
+                if(backupDir.split('/')[:-1] == options.restoreStamp):
+                    backupKey = backupDir
+        if backupKey == None:
+            log("restoreStamp was not found - restoring the latest")
+    
+    ## if we don't have a backup key, got get the lastest backup
+    if backupKey == None:
+        backupKey = backupFiles['hourly'][0]
+    
+    ## if our key is still none at this point, we have never performed a backup - just return
+    if backupKey == None:
+        return
+
     if options.dumpDir == None or os.path.exists(options.dumpDir) == False:
         error("invalid dump dir [%s]" % options.dumpDir)
     bucket = getS3BackupBucket()
+    log("restore got bucket: %s" % bucket)
     for directory in options.backupDirectories:
         log("working on directory: %s" % directory)
         filename = "%s/%s.tar.gz" % (options.dumpDir, directory.replace(os.path.sep, "_"))
-
-    tar = tarfile.open("sample.tar.gz")
-    tar.extractall()
-    tar.close()
+        s3Key = "%s/%s" % (backupKey, filename.split('/')[-1])
+        log("  s3Key: %s" % s3Key)
+        log("  filename: %s" % filename)
+        log("  downloadFromS3(%s, %s)" % (s3Key, filename))
+        downloadFromS3(s3Key, filename)
+        tar = tarfile.open(filename)
+        tar.extractall(path = os.path.abspath(os.path.join(directory, os.pardir)))
+        tar.close()
 
 def runBackup():
     backupfiles = []
@@ -238,6 +267,12 @@ def cleanupOldBackups(hourly=25, daily=8, weekly=6, monthly=6):
             except:
                 log("Couldn't delete backup from s3 %.  Exception: %." % (backup_name, traceback.format_exc()))
 
+def downloadFromS3(s3_key, localFile):
+    bucket = getS3BackupBucket()
+    log("downloading [%s] from s3 bucket: %s" % (localFile, bucket))
+    key = bucket.get_key(s3_key)
+    key.get_contents_to_filename(localFile)
+
 def uploadToS3(localFile, s3_key):
     bucket = getS3BackupBucket()
     # Upload file to s3 bucket
@@ -259,11 +294,6 @@ def uploadToS3(localFile, s3_key):
     mp.complete_upload()
     
 def main():
-    ## lets make sure the directories are valid
-    for directory in options.backupDirectories:
-        if os.path.exists(directory) == False:
-            error("invalid directory specified [%s]" % directory)
-
     ## basic premise is this:
     ##   run a restore check on first launch... 
     ##     failure exits the script
@@ -279,7 +309,7 @@ def main():
     ##   upload to s3
 
     ##   run a restore check on first launch... 
-    if options.restore == True
+    if options.restore == True:
         ## run the pre-restore if it exists
         if runPreRestoreStripts() == 0:
             ## restore if prerestore is ok
@@ -289,6 +319,11 @@ def main():
         else:
             error("pre restore script exited with code [%d].. exiting" % rc)
         sys.exit(0)
+
+    ## lets make sure the directories are valid
+    for directory in options.backupDirectories:
+        if os.path.exists(directory) == False:
+            error("invalid directory specified [%s]" % directory)
     
     ##   run the pre-backup if it exists
     if options.preBackupScript:
