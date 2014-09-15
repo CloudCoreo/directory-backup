@@ -15,7 +15,7 @@
 ##              --post-backup-script </path/to/script> \
 ##              --quiet-time 3600 \
 ##              --rolling-pattern <hours, days, weeks, months, years> \
-##              --restore-decider </path/to/script>
+##              --restore
 ##              --dump-dir </path/to/script>
 ##
 ######################################################################
@@ -35,7 +35,7 @@ import argparse
 import textwrap
 from contextlib import closing
 
-version = '0.0.2'
+version = '0.0.3'
 
 logging.basicConfig()
 def parseArgs():
@@ -55,8 +55,8 @@ def parseArgs():
               --pre-backup-script </path/to/script> \
               --post-backup-script </path/to/script> \
               --quiet-time 3600 \
-              --rolling-pattern <hours, days, weeks, months, years> \
-              --restore-decider </path/to/script>
+              --rolling-pattern <hours, days, weeks, months> \
+              --restore \ ## this will override all other options that are unncessary
               --dump-dir </path/to/script>
 '''
     ))
@@ -67,9 +67,8 @@ def parseArgs():
     parser.add_argument("--directory",               dest="backupDirectories",     action="append",      default=[],                                         required=False,  help="Specified one or more times to determine which directories must be backed up")
     parser.add_argument("--pre-backup-script",       dest="preBackupScript",                             default=None,                                       required=False, help="A script to run blindly (./<script>) before tar-gzipping the backup directories")
     parser.add_argument("--post-backup-script",      dest="postBackupScript",                            default=None,                                       required=False, help="A script to run blindly (./<script>) after tar-gzipping the backup directories, but before syncing to s3")
-    parser.add_argument("--quiet-time",              dest="quietTime",                                   default=3600,                                       required=False, help="How many seconds to wait between backup runs")
-    parser.add_argument("--rolling-pattern",         dest="rollingPattern",                              default="24,7,5,12,5",                              required=False, help="A CSV of how many backups of each type to keep. I.E 24,7,5,12,5 will keep 24 hourly, 7 daily, 5 weekly, 12 monthly and 5 yearly backups")
-    parser.add_argument("--restore-decider",         dest="restoreDecider",                              default=None,                                       required=False, help="A script to run blindly (./<script>) after tar-gzipping the backup directories, but before syncing to s3")
+    parser.add_argument("--rolling-pattern",         dest="rollingPattern",                              default="24,7,5,12",                                required=False, help="A CSV of how many backups of each type to keep. I.E 24,7,5,12 will keep 24 hourly, 7 daily, 5 weekly, and 12 monthly")
+    parser.add_argument("--restore",                 dest="restore",               action="store_true",  default=False,                                      required=False, help="Perform a restore")
     parser.add_argument("--dump-dir",                dest="dumpDir",                                     default="/tmp/backup-dump",                         required=False, help="Where to store the tar.gz files before uploading to s3")
     parser.add_argument("--pre-restore-script",      dest="preRestoreScript",                            default=None,                                       required=False, help="A script to run blindly (./<script>) before restoring the latest backup")
     parser.add_argument("--post-restore-script",     dest="postRestoreScript",                           default=None,                                       required=False, help="A script to run blindly (./<script>) after restoring the latest backup")
@@ -123,7 +122,6 @@ def metaData(dataPath):
 def runScript(script, onFailure = ""):
     if os.path.isfile(script) != True:
         error("Script [%s] was not found" % script)
-
     log("running script [%s]" % script)
     os.chmod(script, stat.S_IWUSR | stat.S_IRUSR | stat.S_IXUSR)
     ## we need to check the error and output if we are debugging or not
@@ -146,6 +144,19 @@ def error(message):
     log("ERROR: %s" % message)
     raise Exception(message)
 
+def restoreDirectories():
+    backupfiles = getBackupFiles()
+    if options.dumpDir == None or os.path.exists(options.dumpDir) == False:
+        error("invalid dump dir [%s]" % options.dumpDir)
+    bucket = getS3BackupBucket()
+    for directory in options.backupDirectories:
+        log("working on directory: %s" % directory)
+        filename = "%s/%s.tar.gz" % (options.dumpDir, directory.replace(os.path.sep, "_"))
+
+    tar = tarfile.open("sample.tar.gz")
+    tar.extractall()
+    tar.close()
+
 def runBackup():
     backupfiles = []
     if options.dumpDir == None or os.path.exists(options.dumpDir) == False:
@@ -163,13 +174,16 @@ def runBackup():
     return backupfiles
 
 def runPreRestoreStripts():
-    rc = runScript(options.preRestoreScript, onFailure = "sys.exit(1)")
+    if options.preRestoreScript:
+        return runScript(options.preRestoreScript, onFailure = "sys.exit(1)")
+    else:
+        return 0
 
 def runPostRestoreStripts():
-    rc = runScript(options.postRestoreScript, onFailure = "sys.exit(1)")
-
-def restoreDirectories():
-    error("implement restoreDirectories")
+    if options.preRestoreScript:
+        return runScript(options.postRestoreScript, onFailure = "sys.exit(1)")
+    else:
+        return 0
 
 def getS3BackupBucket():
     # Returns the boto S3 Bucket object being used for backups
@@ -265,25 +279,16 @@ def main():
     ##   upload to s3
 
     ##   run a restore check on first launch... 
-    if options.restoreDecider != None:
-        rc = runScript(options.restoreDecider, onFailure = "sys.exit(1)")
-        ## failure exits the script
-        ## script rc 0 = means restore, rc 2 = don't restore, anything else is an error
-        if rc == 0:
-            log("Restore decider exited with return code of 0, restoring now")
-            ## run the pre-restore if it exists
-            if runPreRestoreStripts() == 0:
-                ## restore if prerestore is ok
-                restoreDirectories()
-                ## run the post-restore if it exists
-                runPostRestoreStripts()
-            else:
-                error("pre restore script exited with code [%d].. exiting" % rc)
-        ## if decider return 2, don't restore
-        elif rc == 2:
-            log("Restore decider exited with return code of 1, not restoring")
+    if options.restore == True
+        ## run the pre-restore if it exists
+        if runPreRestoreStripts() == 0:
+            ## restore if prerestore is ok
+            restoreDirectories()
+            ## run the post-restore if it exists
+            runPostRestoreStripts()
         else:
-            error("Restore Decider script exited with code [%d].. exiting" % rc)
+            error("pre restore script exited with code [%d].. exiting" % rc)
+        sys.exit(0)
     
     ##   run the pre-backup if it exists
     if options.preBackupScript:
