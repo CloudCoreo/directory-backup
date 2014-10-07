@@ -10,7 +10,7 @@
 ##              --s3-prefix <backup/prefix/in/s3/bucket> \
 ##              --directory <dir 1> \
 ##              --directory <dir 2> \
-##              --exculdes "*.tmp" \
+##              --excludes "*.tmp" \
 ##              --pre-backup-script </path/to/script> \
 ##              --post-backup-script </path/to/script> \
 ##              --quiet-time 3600 \
@@ -38,7 +38,7 @@ from contextlib import closing
 from datetime import timedelta
 import re
 
-version = '0.0.3'
+version = '0.0.4'
 
 logging.basicConfig()
 def parseArgs():
@@ -164,7 +164,8 @@ def restoreDirectories():
     
     ## if we don't have a backup key, got get the lastest backup
     if backupKey == None:
-        backupKey = backupFiles['hourly'][0]
+        if backupFiles['hourly'] and backupFiles['hourly'][0]:
+            backupKey = backupFiles['hourly'][0]
     
     ## if our key is still none at this point, we have never performed a backup - just return
     if backupKey == None:
