@@ -10,7 +10,7 @@
 ##              --s3-prefix <backup/prefix/in/s3/bucket> \
 ##              --directory <dir 1> \
 ##              --directory <dir 2> \
-##              --excludes "*.tmp" \
+##              --exculde ".*\.tmp" \
 ##              --pre-backup-script </path/to/script> \
 ##              --post-backup-script </path/to/script> \
 ##              --quiet-time 3600 \
@@ -38,7 +38,7 @@ from contextlib import closing
 from datetime import timedelta
 import re
 
-version = '0.0.4'
+version = '0.0.5'
 
 logging.basicConfig()
 def parseArgs():
@@ -55,6 +55,8 @@ def parseArgs():
               --s3-prefix <backup/prefix/in/s3/bucket> \
               --directory <dir 1> \
               --directory <dir 2> \
+              --exclude <regex pattern 1> \
+              --exclude <regex pattern 2> \
               --pre-backup-script </path/to/script> \
               --post-backup-script </path/to/script> \
               --quiet-time 3600 \
@@ -64,10 +66,11 @@ def parseArgs():
 '''
     ))
     parser.add_argument("--log-file",                dest="logFile",                                     default="/var/log/cloudcoreo-directory-backup.log", required=False, help="The log file in which to dump debug information [default: %default]")
-    parser.add_argument("--s3-backup-bucket",        dest="s3BackupBucket",                              default=None,                                       required=False,  help="The s3 bucket where the directories should be backed up [default: %default]")
-    parser.add_argument("--s3-backup-region",        dest="s3BackupRegion",                              default=None,                                       required=False,  help="The regoin where the s3 backup bucket exists [default: %default]")
-    parser.add_argument("--s3-prefix",               dest="s3Prefix",                                    default=None,                                       required=False,  help="The key prefix in s3... this will be <key>/<timestamp>/ [default: %default]")
-    parser.add_argument("--directory",               dest="backupDirectories",     action="append",      default=[],                                         required=False,  help="Specified one or more times to determine which directories must be backed up")
+    parser.add_argument("--s3-backup-bucket",        dest="s3BackupBucket",                              default=None,                                       required=False, help="The s3 bucket where the directories should be backed up [default: %default]")
+    parser.add_argument("--s3-backup-region",        dest="s3BackupRegion",                              default=None,                                       required=False, help="The regoin where the s3 backup bucket exists [default: %default]")
+    parser.add_argument("--s3-prefix",               dest="s3Prefix",                                    default=None,                                       required=False, help="The key prefix in s3... this will be <key>/<timestamp>/ [default: %default]")
+    parser.add_argument("--directory",               dest="backupDirectories",     action="append",      default=[],                                         required=False, help="Specified one or more times to determine which directories must be backed up")
+    parser.add_argument("--exclude",                 dest="excludes",              action="append",      default=[],                                         required=False, help="Patterns to exclude")
     parser.add_argument("--pre-backup-script",       dest="preBackupScript",                             default=None,                                       required=False, help="A script to run blindly (./<script>) before tar-gzipping the backup directories")
     parser.add_argument("--post-backup-script",      dest="postBackupScript",                            default=None,                                       required=False, help="A script to run blindly (./<script>) after tar-gzipping the backup directories, but before syncing to s3")
     parser.add_argument("--rolling-pattern",         dest="rollingPattern",                              default="24,7,5,12",                                required=False, help="A CSV of how many backups of each type to keep. I.E 24,7,5,12 will keep 24 hourly, 7 daily, 5 weekly, and 12 monthly")
@@ -198,10 +201,19 @@ def runBackup():
         if os.path.exists(directory) == False:
             error("invalid directory specified")
         with closing(tarfile.open(filename, "w:gz")) as tar:
-            tar.add(directory, arcname=os.path.basename(directory))
+            tar.add(directory, arcname=os.path.basename(directory), exclude=exclude_function)
         backupfiles.append(filename)
     log("created archive [%s]" % filename)
     return backupfiles
+
+def exclude_function(tarinfo):
+    for regex in options.excludes:
+        matcher = re.compile(regex)
+        if matcher.match(tarinfo):
+            log("skipping file: %s" % tarinfo)
+            return True
+    log("adding file: %s" % tarinfo)
+    return False
 
 def runPreRestoreStripts():
     if options.preRestoreScript:
