@@ -38,7 +38,7 @@ from contextlib import closing
 from datetime import timedelta
 import re
 
-version = '0.0.5'
+version = '0.0.6'
 
 logging.basicConfig()
 def parseArgs():
@@ -331,40 +331,39 @@ def main():
             runPostRestoreStripts()
         else:
             error("pre restore script exited with code [%d].. exiting" % rc)
-        sys.exit(0)
-
-    ## lets make sure the directories are valid
-    for directory in options.backupDirectories:
-        if os.path.exists(directory) == False:
-            error("invalid directory specified [%s]" % directory)
+    else:
+        ## lets make sure the directories are valid
+        for directory in options.backupDirectories:
+            if os.path.exists(directory) == False:
+                error("invalid directory specified [%s]" % directory)
+        
+        ##   run the pre-backup if it exists
+        if options.preBackupScript:
+            ## do not continue on error
+            rc = runScript(options.preBackupScript, onFailure = "sys.exit(1)")
+            if rc != 0:
+                sys.exit(rc)
+        ## run the backup (tar gz)
+        tar_files = runBackup()
     
-    ##   run the pre-backup if it exists
-    if options.preBackupScript:
-        ## do not continue on error
-        rc = runScript(options.preBackupScript, onFailure = "sys.exit(1)")
-        if rc != 0:
-            sys.exit(1)
-    ## run the backup (tar gz)
-    tar_files = runBackup()
-
-    ##   run the post backup if it exists
-    if options.postBackupScript:
-        ## continue on error
-        rc = runScript(options.postBackupScript, onFailure = "")
-        if rc != 0:
-            ## error is logged but script contineues
-            log("Post backup did not execute succesfully")
-        else:
-            log("Post backup executed succesfully")
-
-    ## upload to s3
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    log("timestamp: %s" % timestamp)
-    for tar_file in tar_files:
-        s3_backup_key = "%s/%s/%s" % (options.s3Prefix, timestamp, os.path.basename(tar_file))
-        log("s3_backup_key: %s" % s3_backup_key)
-        uploadToS3(tar_file, s3_backup_key)
-
+        ##   run the post backup if it exists
+        if options.postBackupScript:
+            ## continue on error
+            rc = runScript(options.postBackupScript, onFailure = "")
+            if rc != 0:
+                ## error is logged but script contineues
+                log("Post backup did not execute succesfully")
+            else:
+                log("Post backup executed succesfully")
+    
+        ## upload to s3
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        log("timestamp: %s" % timestamp)
+        for tar_file in tar_files:
+            s3_backup_key = "%s/%s/%s" % (options.s3Prefix, timestamp, os.path.basename(tar_file))
+            log("s3_backup_key: %s" % s3_backup_key)
+            uploadToS3(tar_file, s3_backup_key)
+    
 options = parseArgs()
 
 if options.version:
