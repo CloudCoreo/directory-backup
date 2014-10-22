@@ -38,7 +38,7 @@ from contextlib import closing
 from datetime import timedelta
 import re
 
-version = '0.0.6'
+version = '0.0.8'
 
 logging.basicConfig()
 def parseArgs():
@@ -132,20 +132,19 @@ def runScript(script, onFailure = ""):
     log("running script [%s]" % script)
     os.chmod(script, stat.S_IWUSR | stat.S_IRUSR | stat.S_IXUSR)
     ## we need to check the error and output if we are debugging or not
-    err = None
-    out = None
-    proc = subprocess.Popen([script], stdout=subprocess.PIPE, shell=True)
-    (out, err) = proc.communicate()
-    log(err)
-    log(out)
-    if not err:
+    proc_ret_code = None
+    run = []
+    run.append(script)
+    with open(options.logFile, 'a') as log_file:
+        proc_ret_code = subprocess.call(run, shell=False, stdout=log_file, stderr=log_file)
+
+    if proc_ret_code == 0:
         ## return the return code
         log("Success running script [%s]" % script)
-        log("  returning rc [%d]" % proc.returncode)
+        log("  returning rc [%d]" % proc_ret_code)
     else:
-        fullRunError = err
         exec onFailureString
-    return proc.returncode
+    return proc_ret_code
     
 def error(message):
     log("ERROR: %s" % message)
@@ -214,18 +213,6 @@ def exclude_function(tarinfo):
             return True
     log("adding file: %s" % tarinfo)
     return False
-
-def runPreRestoreStripts():
-    if options.preRestoreScript:
-        return runScript(options.preRestoreScript, onFailure = "sys.exit(1)")
-    else:
-        return 0
-
-def runPostRestoreStripts():
-    if options.preRestoreScript:
-        return runScript(options.postRestoreScript, onFailure = "sys.exit(1)")
-    else:
-        return 0
 
 def getS3BackupBucket():
     # Returns the boto S3 Bucket object being used for backups
@@ -324,11 +311,14 @@ def main():
     ##   run a restore check on first launch... 
     if options.restore == True:
         ## run the pre-restore if it exists
-        if runPreRestoreStripts() == 0:
+        preRestoreRc = runScript(options.preRestoreScript, onFailure = "sys.exit(1)")
+        if preRestoreRc == 0:
             ## restore if prerestore is ok
             restoreDirectories()
             ## run the post-restore if it exists
-            runPostRestoreStripts()
+            postRestoreRc = runScript(options.postRestoreScript, onFailure = "sys.exit(1)")
+            if preRestoreRc != 0:
+                sys.exit(preRestoreRc)
         else:
             error("pre restore script exited with code [%d].. exiting" % rc)
     else:
