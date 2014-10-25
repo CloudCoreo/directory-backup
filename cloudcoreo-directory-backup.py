@@ -38,7 +38,7 @@ from contextlib import closing
 from datetime import timedelta
 import re
 
-version = '0.0.8'
+version = '0.0.9'
 
 logging.basicConfig()
 def parseArgs():
@@ -168,7 +168,13 @@ def restoreDirectories():
     if backupKey == None:
         if backupFiles['hourly'] and backupFiles['hourly'][0]:
             backupKey = backupFiles['hourly'][0]
-    
+        elif backupFiles['daily'] and backupFiles['daily'][0]:
+            backupKey = backupFiles['daily'][0]
+        elif backupFiles['weekly'] and backupFiles['weekly'][0]:
+            backupKey = backupFiles['weekly'][0]
+        elif backupFiles['monthly'] and backupFiles['monthly'][0]:
+            backupKey = backupFiles['monthly'][0]
+
     ## if our key is still none at this point, we have never performed a backup - just return
     if backupKey == None:
         return
