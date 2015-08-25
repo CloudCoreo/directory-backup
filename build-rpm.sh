@@ -1,6 +1,8 @@
 #!/bin/bash
 set -eu
 
+pip install requirements.txt
+
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 dir_name=${PWD##*/}
 package="cloudcoreo-directory-backup"
