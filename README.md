@@ -1,6 +1,7 @@
 # CloudCoreo Generic Directory Backup
 You can use this to back up any directory to S3 on a cron basis. Included is the ability to roll backups in S3 as to not retain too many copies
 
+```
 Cloudcoreo directory backup and restore
   example:
       python cloudcoreo-directory-backup.py \
@@ -17,3 +18,4 @@ Cloudcoreo directory backup and restore
              --rolling-pattern <hours, days, weeks, months, years> \
              --restore
              --dump-dir </path/to/script>
+```
