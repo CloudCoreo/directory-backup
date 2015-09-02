@@ -60,7 +60,7 @@ def parseArgs():
               --pre-backup-script </path/to/script> \
               --post-backup-script </path/to/script> \
               --quiet-time 3600 \
-              --rolling-pattern <hours, days, weeks, months> \
+              --rolling-pattern <hours, days, weeks, months, years> \
               --restore \ ## this will override all other options that are unncessary
               --dump-dir </path/to/script>
 '''
@@ -73,7 +73,7 @@ def parseArgs():
     parser.add_argument("--exclude",                 dest="excludes",              action="append",      default=[],                                         required=False, help="Patterns to exclude")
     parser.add_argument("--pre-backup-script",       dest="preBackupScript",                             default=None,                                       required=False, help="A script to run blindly (./<script>) before tar-gzipping the backup directories")
     parser.add_argument("--post-backup-script",      dest="postBackupScript",                            default=None,                                       required=False, help="A script to run blindly (./<script>) after tar-gzipping the backup directories, but before syncing to s3")
-    parser.add_argument("--rolling-pattern",         dest="rollingPattern",                              default="24,7,5,12",                                required=False, help="A CSV of how many backups of each type to keep. I.E 24,7,5,12 will keep 24 hourly, 7 daily, 5 weekly, and 12 monthly")
+    parser.add_argument("--rolling-pattern",         dest="rollingPattern",                              default="24,7,5,12,5",                              required=False, help="A CSV of how many backups of each type to keep. I.E 24,7,5,12,5 will keep 24 hourly, 7 daily, 5 weekly, 12 monthly and 5 yearly")
     parser.add_argument("--restore",                 dest="restore",               action="store_true",  default=False,                                      required=False, help="Perform a restore")
     parser.add_argument("--restore-stamp",           dest="restoreStamp",                                default=None,                                       required=False, help="The timestamp to restore - defaults to the lastest hourly backup")
     parser.add_argument("--dump-dir",                dest="dumpDir",                                     default="/tmp/backup-dump",                         required=False, help="Where to store the tar.gz files before uploading to s3")
@@ -95,13 +95,13 @@ def log(statement):
     for line in statement.split("\n"):
         if isFirst:
             if options.debug:
-                print("%s - %s\n" % (ts, line))
+                print("%s - %s" % (ts, line))
             else:
                 logFile.write("%s - %s\n" % (ts, line))
             isFirst = False
         else:
             if options.debug:
-                print("%s -    %s\n" % (ts, line))
+                print("%s -    %s" % (ts, line))
             else:
                 logFile.write("%s -    %s\n" % (ts, line))
     logFile.close()
@@ -226,52 +226,118 @@ def getS3BackupBucket():
     log("connecting to bucket: %s" % options.s3BackupBucket)
     return s3.get_bucket(options.s3BackupBucket)
 
-def getBackupFiles():
-    ## Get a sorted list of backup files and arranged by how old they are (hourly, daily, weekly, monthly)
+def getAllBackupBucketMatchingFiles():
     backup_files = sorted(getS3BackupBucket().list(options.s3Prefix+"/"), reverse=True, key=lambda s3_key: s3_key.name)
-    backup_list={"hourly": [], "daily": [], "weekly": [], "monthly": []}
-    now=datetime.datetime.now()
-    day_delta=timedelta(days=1)
-    week_delta=timedelta(days=7)
-    month_delta=timedelta(days=31) # close enough to a month
+    allFiles = []
+    x = 0;
     for backup_key in backup_files:
         if(re.match(".*\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}/", backup_key.name)):
-            date_ext=backup_key.name.split("/")[-2]
-            key_dir = dirname(backup_key.name)
-            (year, month, day, hour, mins, sec) = date_ext.split("-")
-            backup_date=datetime.datetime(int(year), int(month), int(day), int(hour), int(mins), int(sec))
-            if backup_date > now - day_delta:
-                if key_dir not in backup_list["hourly"]:
-                    backup_list["hourly"].append(key_dir)
-            elif backup_date > now - week_delta:
-                if key_dir not in backup_list["daily"]:
-                    backup_list["daily"].append(key_dir)
-            elif backup_date > now - month_delta:
-                if key_dir not in backup_list["weekly"]:
-                    backup_list["weekly"].append(key_dir)
-            else:
-                if key_dir not in backup_list["monthly"]:
-                    backup_list["monthly"].append(key_dir)
+            allFiles.append(backup_key)
         else:
             log("Found something we didn't expect: %s " % backup_key.name)
+
+    log("found %i backup files in the bucket" % len(allFiles))
+    return allFiles
+
+def getBackupFiles():
+    ## this is the heart of the cleanup process.
+    ## logic:
+    ## get the latest hourlys
+    ##   get the latest daily's that are not part of the hourlys
+    ##     get the latest weeklys that are not part of the hourlys or dailys
+    ##       get the latest monthlys that are not part of the hourlys or dailys or weeklys
+    ##         get the latest yearlys that are not part of the hourlys or dailys or weeklys or monthlys
+    ## Get a sorted list of backup files and arranged by how old they are (hourly, daily, weekly, monthly)
+    backup_files = getAllBackupBucketMatchingFiles()
+    backup_list={"hourly": [], "daily": [], "weekly": [], "monthly": [], "yearly": [], "other": []}
+    backup_date_list={"hourly": [], "daily": [], "weekly": [], "monthly": [], "yearly": []}
+    for backup_key in backup_files:
+        date_ext=backup_key.name.split("/")[-2]
+        key_dir = dirname(backup_key.name)
+        (year, month, day, hour, mins, sec) = date_ext.split("-")
+        for time_interval in backup_list:
+            if time_interval == "hourly":
+                backup_date=datetime.datetime(int(year), int(month), int(day), int(hour), int(1), int(1))
+                if backup_date not in backup_date_list[time_interval]:
+                    backup_list[time_interval].append(key_dir)
+                    backup_date_list[time_interval].append(backup_date)
+            if time_interval == "daily":
+                backup_date=datetime.datetime(int(year), int(month), int(day), int(1), int(1), int(1))
+                if backup_date not in backup_date_list[time_interval]:
+                    backup_list[time_interval].append(key_dir)
+                    backup_date_list[time_interval].append(backup_date)
+            if time_interval == "weekly":
+                if int(day) % 7 == 0:
+                    backup_date=datetime.datetime(int(year), int(month), int(day), int(1), int(1), int(1))
+                    if backup_date not in backup_date_list[time_interval]:
+                        backup_list[time_interval].append(key_dir)
+                        backup_date_list[time_interval].append(backup_date)
+            if time_interval == "monthly":
+                backup_date=datetime.datetime(int(year), int(month), int(1), int(1), int(1), int(1))
+                if backup_date not in backup_date_list[time_interval]:
+                    backup_list[time_interval].append(key_dir)
+                    backup_date_list[time_interval].append(backup_date)
+            if time_interval == "yearly":
+                backup_date=datetime.datetime(int(year), int(1), int(1), int(1), int(1), int(1))
+                if backup_date not in backup_date_list[time_interval]:
+                    backup_list[time_interval].append(key_dir)
+                    backup_date_list[time_interval].append(backup_date)
     return backup_list
 
-def cleanupOldBackups(hourly=25, daily=8, weekly=6, monthly=6):
+def cleanupOldBackups(hourly=25, daily=8, weekly=6, monthly=6, yearly=5):
     bucket = getS3BackupBucket()
     ## Keeps one days worth of hourly backups, one week of daily backups, one month of weekly backups, and one year of monthly backups
+    ## logic:
+    ##  get now through $hourly hours ago
+    ##  get (now through $hourly hours) through (now - daily days)
+    ##    iterate through all and keep newest of each day stamp
+    ##  get (now through $daily days) through (now - monthly days)
+    ##    iterate through all and keep newest of each month up to $montly
+    ##  get (now thorugh $monthly months) through (now - yearly years)
+    ##    iterate through all and keep the newset of each year up to $yearly
+
     log("Cleaning up older backup files that are no longer needed.")
-    backup_policy={"hourly": hourly, "daily": daily, "weekly": weekly, "monthly": monthly}
-    backup_files = getBackupFiles()
-    for time_period in backup_files:
-        backups = backup_files[time_period]
-        while len(backups) > backup_policy[time_period]:
-            backup_name = backups.pop()
-            log("Removing old backup %s from s3 bucket." % backup_name)
+    allBackupFiles = getAllBackupBucketMatchingFiles() ## this is a list of all files
+    ## now we need to limit the ones to keep based on policy,
+    ## put them all into a list and delete the ones that don't match.
+    backupFiles = filterBackupFiles(getBackupFiles())
+    
+    for f in allBackupFiles:
+        bFile = dirname(f.name)
+        if bFile not in backupFiles:
             try:
-                bucketListResultSet = bucket.list(prefix=backup_name)
+                log("deleting old backup: %s" % bFile)
+                bucketListResultSet = bucket.list(prefix=bFile)
                 result = bucket.delete_keys([key.name for key in bucketListResultSet])
             except:
-                log("Couldn't delete backup from s3 %.  Exception: %." % (backup_name, traceback.format_exc()))
+                log("Couldn't delete backup from s3 %.  Exception: %." % (bFile, traceback.format_exc()))
+        else:
+            log('not deleting relevant bFile in backup_files: %s' % bFile)
+
+def filterBackupFiles(all_backup_files):
+    filterdBackupFiles = []
+    (num_hours, num_days, num_weeks, num_months, num_years) = options.rollingPattern.split(",")
+    filterdBackupFiles.extend(all_backup_files["yearly"][0:int(num_years)])
+    log('adding yearlys: %s' % len(all_backup_files["yearly"][0:int(num_years)]))
+    for a in all_backup_files["yearly"][0:int(num_years)]:
+        log('saving years: %s' % a)
+    filterdBackupFiles.extend(all_backup_files["monthly"][0:int(num_months)])
+    log('adding monthly: %s' % len(all_backup_files["monthly"][0:int(num_months)]))
+    for a in all_backup_files["monthly"][0:int(num_months)]:
+        log('saving months: %s' % a)
+    filterdBackupFiles.extend(all_backup_files["weekly"][0:int(num_weeks)])
+    log('adding weekly: %s' % len(all_backup_files["weekly"][0:int(num_weeks)]))
+    for a in all_backup_files["weekly"][0:int(num_weeks)]:
+        log('saving weekly: %s' % a)
+    filterdBackupFiles.extend(all_backup_files["daily"][0:int(num_days)])
+    log('adding daily: %s' % len(all_backup_files["daily"][0:int(num_days)]))
+    for a in all_backup_files["daily"][0:int(num_days)]:
+        log('saving daily: %s' % a)
+    filterdBackupFiles.extend(all_backup_files["hourly"][0:int(num_hours)])
+    log('adding hourly: %s' % len(all_backup_files["hourly"][0:int(num_hours)]))
+    for a in all_backup_files["hourly"][0:int(num_hours)]:
+        log('saving hourly: %s' % a)
+    return filterdBackupFiles
 
 def downloadFromS3(s3_key, localFile):
     bucket = getS3BackupBucket()
@@ -359,7 +425,8 @@ def main():
             s3_backup_key = "%s/%s/%s" % (options.s3Prefix, timestamp, os.path.basename(tar_file))
             log("s3_backup_key: %s" % s3_backup_key)
             uploadToS3(tar_file, s3_backup_key)
-    
+        cleanupOldBackups()
+
 options = parseArgs()
 
 if options.version:
