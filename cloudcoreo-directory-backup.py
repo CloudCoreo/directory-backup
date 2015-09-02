@@ -97,13 +97,13 @@ def log(statement):
             if options.debug:
                 print("%s - %s" % (ts, line))
             else:
-                logFile.write("%s - %s" % (ts, line))
+                logFile.write("%s - %s\n" % (ts, line))
             isFirst = False
         else:
             if options.debug:
                 print("%s -    %s" % (ts, line))
             else:
-                logFile.write("%s -    %s" % (ts, line))
+                logFile.write("%s -    %s\n" % (ts, line))
     logFile.close()
 
 def getAvailabilityZone():
