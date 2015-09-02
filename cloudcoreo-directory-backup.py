@@ -38,7 +38,7 @@ from contextlib import closing
 from datetime import timedelta
 import re
 
-version = '0.0.10'
+version = '0.0.11'
 
 logging.basicConfig()
 def parseArgs():
