@@ -26,6 +26,7 @@ from filechunkio import FileChunkIO
 import string
 import tarfile
 import boto
+from boto.s3.connection import OrdinaryCallingFormat
 import datetime
 import subprocess
 from subprocess import call
@@ -434,6 +435,6 @@ if options.version:
     sys.exit(0)
 
 log("connecting to s3 region %s" % options.s3BackupRegion)
-s3 = boto.s3.connect_to_region(options.s3BackupRegion)
+s3 = boto.s3.connect_to_region(options.s3BackupRegion, calling_format=OrdinaryCallingFormat())
 
 main()
