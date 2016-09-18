@@ -144,7 +144,7 @@ def runScript(script, onFailure = ""):
         log("Success running script [%s]" % script)
         log("  returning rc [%d]" % proc_ret_code)
     else:
-        exec onFailureString
+        exec onFailure
     return proc_ret_code
     
 def error(message):
